@@ -6,13 +6,13 @@
 (deftest build-thread-start-params-fixed-policy-test
   (testing "approval/sandbox policy is fixed for non-interactive app-server use"
     (let [params (sut/build-thread-start-params
-                  {:model "gpt-5-codex"}
+                  {}
                   {:workdir-path "/tmp/w"})]
       (is (= "never" (:approvalPolicy params)))
       (is (= "danger-full-access" (:sandbox params)))
       (is (not (contains? params :sandboxPolicy)))
       (is (= "/tmp/w" (:cwd params)))
-      (is (= "gpt-5-codex" (:model params))))))
+      (is (= "gpt-5.5" (:model params))))))
 
 (deftest dynamic-tools-explicit-false-throws-test
   (testing "dynamic-tools with explicit :experimental-api? false fails fast"
@@ -60,7 +60,7 @@
                   :approvalPolicy "never"
                   :sandbox "danger-full-access"
                   :cwd (.getAbsolutePath (io/file "."))
-                  :model "gpt-5-codex"}
+                  :model "gpt-5.5"}
                  (second (nth @calls 2)))))))))
 
 (deftest run-turn-handles-dynamic-tool-call-request
@@ -119,3 +119,60 @@
                             :contentItems [{:type "inputText"
                                             :text "ticket open"}]}}]
                  @sent)))))))
+
+(deftest run-turn-emits-command-item-callbacks
+  (testing "app-server command execution wire events reach item and command callbacks"
+    (let [service (sut/start! {})
+          msgs (atom [{:method "item/started"
+                       :params {:item {:type "commandExecution"
+                                       :id "cmd-1"
+                                       :commandActions [{:command "ls"}]}}}
+                      {:method "item/commandExecution/outputDelta"
+                       :params {:delta "apps\n"}}
+                      {:method "item/completed"
+                       :params {:item {:type "commandExecution"
+                                       :id "cmd-1"
+                                       :status "completed"
+                                       :commandActions [{:command "ls"}]
+                                       :exitCode 0
+                                       :aggregatedOutput "apps\nbases\n"}}}
+                      {:method "turn/completed"
+                       :params {:turn {:id "turn-1"
+                                       :status "completed"}}}])
+          seen (atom [])
+          client {:session-key "feishu:chat-1"
+                  :thread-id "thr-1"
+                  :writer nil
+                  :stdout-stream nil
+                  :id-atom (atom 0)}]
+      (reset! (:clients* service) {"feishu:chat-1" client})
+      (with-redefs [sut/send-request! (fn [_ method _params]
+                                        (if (= method "turn/start")
+                                          {:turn {:id "turn-1"}}
+                                          {}))
+                    sut/read-next-msg! (fn [_]
+                                         (let [m (first @msgs)]
+                                           (swap! msgs #(vec (rest %)))
+                                           m))]
+        (let [result (#'sut/run-turn-on-client!
+                      service
+                      client
+                      {:session-key "feishu:chat-1"
+                       :input-items [{:type "text"
+                                      :text "try use ls"
+                                      :text_elements []}]
+                       :callbacks {:on-item-started #(swap! seen conj [:started %])
+                                   :on-command-delta #(swap! seen conj [:delta %])
+                                   :on-item-completed #(swap! seen conj [:completed %])}})]
+          (is (= :completed (:status result)))
+          (is (= [[:started {:item-type "commandExecution"
+                             :item-id "cmd-1"
+                             :command "ls"}]
+                  [:delta "apps\n"]
+                  [:completed {:item-type "commandExecution"
+                               :item-id "cmd-1"
+                               :status "completed"
+                               :command "ls"
+                               :exit-code 0
+                               :output "apps\nbases\n"}]]
+                 @seen)))))))

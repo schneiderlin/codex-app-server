@@ -11,6 +11,8 @@
 
 (def ^:private turn-diagnostic-max-events 120)
 
+(def default-model "gpt-5.5")
+
 (defn start!
   [config]
   (->Service (or config {}) (atom {})))
@@ -152,7 +154,7 @@
 (defn build-thread-start-params
   [config request]
   (let [cwd (client-cwd request)
-        model (or (:model request) (:model config) "gpt-5-codex")
+        model (or (:model request) (:model config) default-model)
         dynamic-tools (normalize-dynamic-tools request)]
     (cond-> {:cwd cwd
              :approvalPolicy "never"
@@ -163,7 +165,7 @@
 (defn build-thread-resume-params
   [config request thread-id]
   (let [cwd (client-cwd request)
-        model (or (:model request) (:model config) "gpt-5-codex")]
+        model (or (:model request) (:model config) default-model)]
     {:threadId thread-id
      :approvalPolicy "never"
      :sandbox "danger-full-access"
