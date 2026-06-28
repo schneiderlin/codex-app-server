@@ -1,5 +1,6 @@
 {:paths ["src"]
- :deps {poly/agent-common {:local/root "../agent-common"}
+ :deps {poly/agent-common {:git/url "https://github.com/schneiderlin/agent-common.git"
+                            :git/sha "db9c75b336b5b92a0717d428a58244aa2bff9d52"}
         org.clojure/data.json {:mvn/version "2.4.0"}}
  :aliases {:test {:extra-paths ["test"]
                   :extra-deps {}}}}
