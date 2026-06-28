@@ -160,6 +160,16 @@
              :model model}
       (seq dynamic-tools) (assoc :dynamicTools dynamic-tools))))
 
+(defn build-thread-resume-params
+  [config request thread-id]
+  (let [cwd (client-cwd request)
+        model (or (:model request) (:model config) "gpt-5-codex")]
+    {:threadId thread-id
+     :approvalPolicy "never"
+     :sandbox "danger-full-access"
+     :cwd cwd
+     :model model}))
+
 (defn- clear-cancel-fn!
   [cancel-fn-atom]
   (when (instance? clojure.lang.IAtom cancel-fn-atom)
@@ -337,11 +347,21 @@
         client
 
         (some? desired-remote-thread-id)
-        (do
+        (let [thread-rsp (send-request! client
+                                        "thread/resume"
+                                        (build-thread-resume-params config
+                                                                    request
+                                                                    desired-remote-thread-id))
+              remote-thread (:thread thread-rsp)
+              thread-id (or (:id remote-thread) desired-remote-thread-id)
+              turn-count (count (or (:turns remote-thread) []))]
+          (when (str/blank? (str thread-id))
+            (throw (ex-info "thread/resume returned blank thread id" {})))
           (swap! clients* update (:session-key client)
                  assoc
                  :initialized? true
-                 :thread-id desired-remote-thread-id
+                 :thread-id thread-id
+                 :turn-count turn-count
                  :experimental-api? desired-exp?
                  :dynamic-tools dynamic-tools)
           (get @clients* (:session-key client)))

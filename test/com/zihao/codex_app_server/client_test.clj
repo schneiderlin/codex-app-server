@@ -1,5 +1,6 @@
 (ns com.zihao.codex-app-server.client-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
             [com.zihao.codex-app-server.client :as sut]))
 
 (deftest build-thread-start-params-fixed-policy-test
@@ -24,8 +25,8 @@
                             :description "Fetch ticket"
                             :input-schema {:type "object"}}]})))))
 
-(deftest ensure-thread-reuses-persisted-remote-thread-id
-  (testing "a request with codex-thread-id does not start a fresh thread"
+(deftest ensure-thread-resumes-persisted-remote-thread-id
+  (testing "a request with codex-thread-id resumes the remote thread instead of starting a fresh one"
     (let [service (sut/start! {})
           client {:session-key "feishu:chat-1"
                   :initialized? false
@@ -41,6 +42,9 @@
                                           "initialize" {:userAgent "ua"}
                                           "account/read" {:account {:id "a1"}}
                                           "thread/start" (throw (ex-info "must not start" {}))
+                                          "thread/resume" {:thread {:id (:threadId params)
+                                                                    :turns [{:id "turn-1"}
+                                                                            {:id "turn-2"}]}}
                                           {}))
                     sut/send-json! (fn [& _] nil)]
         (let [result (#'sut/ensure-thread!
@@ -49,7 +53,15 @@
                       {:session-key "feishu:chat-1"
                        :codex-thread-id "remote-thread-1"})]
           (is (= "remote-thread-1" (:thread-id result)))
-          (is (= ["initialize" "account/read"] (mapv first @calls))))))))
+          (is (= 2 (:turn-count result)))
+          (is (= ["initialize" "account/read" "thread/resume"]
+                 (mapv first @calls)))
+          (is (= {:threadId "remote-thread-1"
+                  :approvalPolicy "never"
+                  :sandbox "danger-full-access"
+                  :cwd (.getAbsolutePath (io/file "."))
+                  :model "gpt-5-codex"}
+                 (second (nth @calls 2)))))))))
 
 (deftest run-turn-handles-dynamic-tool-call-request
   (testing "item/tool/call request triggers callback and JSON-RPC response"
