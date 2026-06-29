@@ -176,3 +176,38 @@
                                :exit-code 0
                                :output "apps\nbases\n"}]]
                  @seen)))))))
+
+(deftest interrupt-turn-sends-active-turn-interrupt
+  (testing "interrupt-turn writes the active turn interrupt without waiting for a response"
+    (let [service (sut/start! {})
+          sent (atom [])
+          client {:session-key "feishu:chat-1"
+                  :thread-id "thr-1"
+                  :active-turn-id "turn-1"
+                  :writer nil
+                  :id-atom (atom 0)}]
+      (reset! (:clients* service) {"feishu:chat-1" client})
+      (with-redefs [sut/send-json! (fn [_writer payload]
+                                     (swap! sent conj payload))]
+        (is (= {:interrupted? true
+                :codex-thread-id "thr-1"
+                :codex-turn-id "turn-1"}
+               (sut/interrupt-turn! service {:session-key "feishu:chat-1"})))
+        (is (= [{:id 1
+                 :method "turn/interrupt"
+                 :params {:threadId "thr-1"
+                          :turnId "turn-1"}}]
+               @sent)))))
+  (testing "sessions without an active turn are reported without writing"
+    (let [service (sut/start! {})
+          sent (atom [])]
+      (reset! (:clients* service) {"feishu:chat-1" {:session-key "feishu:chat-1"
+                                                    :thread-id "thr-1"
+                                                    :id-atom (atom 0)}})
+      (with-redefs [sut/send-json! (fn [_writer payload]
+                                     (swap! sent conj payload))]
+        (is (= {:interrupted? false
+                :reason :no-active-turn
+                :codex-thread-id "thr-1"}
+               (sut/interrupt-turn! service {:session-key "feishu:chat-1"})))
+        (is (= [] @sent))))))

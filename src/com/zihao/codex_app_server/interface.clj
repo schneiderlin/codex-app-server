@@ -26,6 +26,10 @@
   [service request]
   (client/steer! service request))
 
+(defn interrupt-turn!
+  [service request]
+  (client/interrupt-turn! service request))
+
 (def parse-json-safe codec/parse-json-safe)
 (def message-role codec/message-role)
 (def user-message->input-items codec/user-message->input-items)

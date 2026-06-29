@@ -767,3 +767,33 @@
     (catch Exception e
       (log/warn (str "[CodexAppServer] steer failed: " (.getMessage e)))
       nil)))
+
+(defn interrupt-turn!
+  "Request interruption of the currently active turn for a session.
+   This writes the JSON-RPC notification without waiting for a response, so it
+   is safe to call while the turn runner owns the app-server reader."
+  [service request]
+  (try
+    (let [key (require-session-key request)]
+      (if-let [client (get @(:clients* service) key)]
+        (if-let [turn-id (:active-turn-id client)]
+          (let [id (next-id! (:id-atom client))]
+            (send-json! (:writer client)
+                        {:id id
+                         :method "turn/interrupt"
+                         :params {:threadId (:thread-id client)
+                                  :turnId turn-id}})
+            (log/debug (str "[CodexAppServer] interrupt sent, turn-id=" turn-id))
+            {:interrupted? true
+             :codex-thread-id (:thread-id client)
+             :codex-turn-id turn-id})
+          {:interrupted? false
+           :reason :no-active-turn
+           :codex-thread-id (:thread-id client)})
+        {:interrupted? false
+         :reason :no-client}))
+    (catch Exception e
+      (log/warn (str "[CodexAppServer] interrupt failed: " (.getMessage e)))
+      {:interrupted? false
+       :reason :send-failed
+       :error-message (.getMessage e)})))
