@@ -18,10 +18,20 @@
 
 (defn codex-app-server-command
   ([]
-   (codex-app-server-command (System/getProperty "os.name")
+   (codex-app-server-command {}))
+  ([config]
+   (codex-app-server-command config
+                             (System/getProperty "os.name")
                              (System/getenv "ComSpec")))
   ([os-name windows-comspec]
-   (let [args ["codex" "app-server" "--listen" "stdio://"]]
+   (codex-app-server-command {} os-name windows-comspec))
+  ([config os-name windows-comspec]
+   (let [args (cond-> ["codex" "app-server"]
+                (true? (:code-mode-only? config))
+                (into ["--enable" "code_mode_only"])
+
+                true
+                (into ["--listen" "stdio://"]))]
      (if (windows-os-name? os-name)
        (into [(or (some-> windows-comspec str/trim not-empty)
                   "cmd.exe")
@@ -54,8 +64,8 @@
 (defn start-codex-app-server-process!
   ([config]
    (start-codex-app-server-process! config (resolve-codex-home config)))
-  ([_config codex-home]
-   (let [pb (ProcessBuilder. (codex-app-server-command))
+  ([config codex-home]
+   (let [pb (ProcessBuilder. (codex-app-server-command config))
          env (.environment pb)]
      (.mkdirs (io/file codex-home))
      (configure-codex-app-server-environment! env codex-home)

@@ -49,6 +49,8 @@
 (def thread-name-updated codec/thread-name-updated)
 (def item-started codec/item-started)
 (def item-completed codec/item-completed)
+(def code-mode-call codec/code-mode-call)
+(def code-mode-output codec/code-mode-output)
 (def command-output-delta codec/command-output-delta)
 (def file-change-output-delta codec/file-change-output-delta)
 (def plan-delta codec/plan-delta)

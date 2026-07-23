@@ -14,6 +14,17 @@
       (is (= "/tmp/w" (:cwd params)))
       (is (= "gpt-5.5" (:model params))))))
 
+(deftest build-thread-start-params-code-mode-raw-events-test
+  (testing "Code Mode automatically subscribes new threads to raw response events"
+    (is (= true
+           (:experimentalRawEvents
+            (sut/build-thread-start-params
+             {:code-mode-only? true}
+             {:workdir-path "/tmp/w"})))))
+  (testing "normal app-server threads do not subscribe to raw response events"
+    (is (not (contains? (sut/build-thread-start-params {} {})
+                        :experimentalRawEvents)))))
+
 (deftest dynamic-tools-explicit-false-throws-test
   (testing "dynamic-tools with explicit :experimental-api? false fails fast"
     (is (thrown-with-msg?
@@ -24,6 +35,14 @@
            :dynamic-tools [{:name "lookup_ticket"
                             :description "Fetch ticket"
                             :input-schema {:type "object"}}]})))))
+
+(deftest code-mode-explicit-experimental-api-false-throws-test
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo
+       #"code-mode-only requires :experimental-api\? true"
+       (sut/desired-experimental-api?
+        {:experimental-api? false
+         :code-mode-only? true}))))
 
 (deftest ensure-thread-resumes-persisted-remote-thread-id
   (testing "a request with codex-thread-id resumes the remote thread instead of starting a fresh one"
@@ -176,6 +195,66 @@
                                :exit-code 0
                                :output "apps\nbases\n"}]]
                  @seen)))))))
+
+(deftest run-turn-emits-correlated-code-mode-item-callbacks
+  (testing "raw exec source and output become one stable Code Mode item"
+    (let [service (sut/start! {})
+          msgs (atom [{:method "rawResponseItem/completed"
+                       :params {:threadId "thr-1"
+                                :turnId "turn-1"
+                                :item {:type "custom_tool_call"
+                                       :id "ctc-1"
+                                       :call_id "call-1"
+                                       :name "exec"
+                                       :input "text(ALL_TOOLS.length);"}}}
+                      {:method "rawResponseItem/completed"
+                       :params {:threadId "thr-1"
+                                :turnId "turn-1"
+                                :item {:type "custom_tool_call_output"
+                                       :call_id "call-1"
+                                       :output [{:type "input_text"
+                                                 :text "Script completed\n7"}]}}}
+                      {:method "turn/completed"
+                       :params {:turn {:id "turn-1"
+                                       :status "completed"}}}])
+          seen (atom [])
+          client {:session-key "web:thread-1"
+                  :thread-id "thr-1"
+                  :writer nil
+                  :stdout-stream nil
+                  :id-atom (atom 0)}]
+      (reset! (:clients* service) {"web:thread-1" client})
+      (with-redefs [sut/send-request! (fn [_ method _params]
+                                        (if (= method "turn/start")
+                                          {:turn {:id "turn-1"}}
+                                          {}))
+                    sut/read-next-msg! (fn [_]
+                                         (let [m (first @msgs)]
+                                           (swap! msgs #(vec (rest %)))
+                                           m))]
+        (#'sut/run-turn-on-client!
+         service
+         client
+         {:session-key "web:thread-1"
+          :input-items [{:type "text" :text "prove it" :text_elements []}]
+          :callbacks {:on-item-started #(swap! seen conj [:started %])
+                      :on-item-completed #(swap! seen conj [:completed %])}})
+        (is (= [[:started {:item-type "codeMode"
+                            :item-id "ctc-1"
+                            :status "running"
+                            :codex-turn-id "turn-1"
+                            :call-id "call-1"
+                            :language "javascript"
+                            :source "text(ALL_TOOLS.length);"}]
+                [:completed {:item-type "codeMode"
+                              :item-id "ctc-1"
+                              :status "completed"
+                              :codex-turn-id "turn-1"
+                              :call-id "call-1"
+                              :language "javascript"
+                              :source "text(ALL_TOOLS.length);"
+                              :output "Script completed\n7"}]]
+               @seen))))))
 
 (deftest interrupt-turn-sends-active-turn-interrupt
   (testing "interrupt-turn writes the active turn interrupt without waiting for a response"

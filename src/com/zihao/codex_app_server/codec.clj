@@ -208,6 +208,61 @@
          :status (:status item)
          :data item}))))
 
+(defn code-mode-call
+  "Parse the internal raw response notification for a Code Mode exec call."
+  [msg]
+  (let [params (:params msg)
+        item (:item params)
+        call-id (:call_id item)
+        turn-id (:turnId params)
+        source (:input item)]
+    (when (and (= "rawResponseItem/completed" (:method msg))
+               (= "custom_tool_call" (:type item))
+               (= "exec" (:name item))
+               (not (str/blank? (str call-id)))
+               (not (str/blank? (str turn-id)))
+               (string? source))
+      {:item-type "codeMode"
+       :item-id (or (:id item) (str "code-mode:" turn-id ":" call-id))
+       :status "running"
+       :codex-turn-id turn-id
+       :call-id call-id
+       :language "javascript"
+       :source source})))
+
+(defn- code-mode-output-text
+  [output]
+  (cond
+    (string? output)
+    output
+
+    (sequential? output)
+    (->> output
+         (keep (fn [content-item]
+                 (when (and (map? content-item)
+                            (string? (:text content-item)))
+                   (:text content-item))))
+         (str/join ""))
+
+    :else nil))
+
+(defn code-mode-output
+  "Parse the internal raw response notification for a Code Mode exec output."
+  [msg]
+  (let [params (:params msg)
+        item (:item params)
+        call-id (:call_id item)
+        turn-id (:turnId params)
+        output (code-mode-output-text (:output item))]
+    (when (and (= "rawResponseItem/completed" (:method msg))
+               (= "custom_tool_call_output" (:type item))
+               (not (str/blank? (str call-id)))
+               (not (str/blank? (str turn-id)))
+               (some? output))
+      {:codex-turn-id turn-id
+       :call-id call-id
+       :output output})))
+
 (defn command-output-delta
   [msg]
   (when (= "item/commandExecution/outputDelta" (:method msg))

@@ -98,7 +98,11 @@
 (defn- request-config
   [service request]
   (merge (:config service)
-         (select-keys request [:codex-home :model])))
+         (select-keys request [:codex-home
+                               :model
+                               :code-mode-only?
+                               :experimental-api?
+                               :dynamic-tools])))
 
 (defn- client-cwd
   [request]
@@ -144,23 +148,30 @@
 (defn desired-experimental-api?
   [request]
   (let [dynamic-tools (normalize-dynamic-tools request)
-        explicit-flag (:experimental-api? request)]
+        explicit-flag (:experimental-api? request)
+        code-mode-only? (true? (:code-mode-only? request))]
     (when (and (seq dynamic-tools)
                (false? explicit-flag))
       (throw (ex-info "dynamic-tools requires :experimental-api? true"
                       {:type :user-error})))
-    (boolean (or explicit-flag (seq dynamic-tools)))))
+    (when (and code-mode-only?
+               (false? explicit-flag))
+      (throw (ex-info "code-mode-only requires :experimental-api? true"
+                      {:type :user-error})))
+    (boolean (or explicit-flag (seq dynamic-tools) code-mode-only?))))
 
 (defn build-thread-start-params
   [config request]
   (let [cwd (client-cwd request)
         model (or (:model request) (:model config) default-model)
-        dynamic-tools (normalize-dynamic-tools request)]
+        dynamic-tools (normalize-dynamic-tools request)
+        code-mode-only? (true? (:code-mode-only? config))]
     (cond-> {:cwd cwd
              :approvalPolicy "never"
              :sandbox "danger-full-access"
              :model model}
-      (seq dynamic-tools) (assoc :dynamicTools dynamic-tools))))
+      (seq dynamic-tools) (assoc :dynamicTools dynamic-tools)
+      code-mode-only? (assoc :experimentalRawEvents true))))
 
 (defn build-thread-resume-params
   [config request thread-id]
@@ -198,6 +209,7 @@
      :created-at-ms (now-ms)
      :last-cwd (client-cwd request)
      :codex-home codex-home
+     :code-mode-only? (true? (:code-mode-only? config))
      :experimental-api? nil
      :dynamic-tools nil}))
 
@@ -209,12 +221,15 @@
   [service session-key request]
   (let [clients* (:clients* service)
         current (get @clients* session-key)
-        desired-exp? (desired-experimental-api? request)
-        desired-codex-home (process/resolve-codex-home (request-config service request))
+        config (request-config service request)
+        desired-exp? (desired-experimental-api? config)
+        desired-codex-home (process/resolve-codex-home config)
+        desired-code-mode-only? (true? (:code-mode-only? config))
         desired-thread (desired-thread-id request)
         reusable? (and current
                        (.isAlive ^Process (:process current))
                        (= desired-codex-home (:codex-home current))
+                       (= desired-code-mode-only? (:code-mode-only? current))
                        (or (not (:initialized? current))
                            (= desired-exp? (boolean (:experimental-api? current))))
                        (or (nil? desired-thread)
@@ -311,8 +326,9 @@
 (defn- ensure-protocol-initialized!
   [service client request]
   (let [clients* (:clients* service)
-        dynamic-tools (normalize-dynamic-tools request)
-        desired-exp? (desired-experimental-api? request)]
+        config (request-config service request)
+        dynamic-tools (normalize-dynamic-tools config)
+        desired-exp? (desired-experimental-api? config)]
     (when-not (:initialized? client)
       (send-request! client
                      "initialize"
@@ -333,8 +349,8 @@
   [service client request]
   (let [clients* (:clients* service)
         config (request-config service request)
-        dynamic-tools (normalize-dynamic-tools request)
-        desired-exp? (desired-experimental-api? request)
+        dynamic-tools (normalize-dynamic-tools config)
+        desired-exp? (desired-experimental-api? config)
         desired-remote-thread-id (desired-thread-id request)]
     (when (and (:thread-id client)
                (seq dynamic-tools)
@@ -512,7 +528,8 @@
         task-complete-agent-text (atom nil)
         agent-delta-chars (atom 0)
         reasoning-delta-chars (atom 0)
-        recent-wire-events (atom [])]
+        recent-wire-events (atom [])
+        code-mode-calls (atom {})]
     (when (instance? clojure.lang.IAtom stream-atom)
       (reset! stream-atom (:stdout-stream client)))
     (when (instance? clojure.lang.IAtom cancel-fn-atom)
@@ -533,6 +550,18 @@
                           " keys=" (pr-str (keys msg))
                           (when (#{"item/started" "item/completed"} (:method msg))
                             (str " params=" (pr-str (:params msg))))))
+          (when-let [code-mode-call (codec/code-mode-call msg)]
+            (swap! code-mode-calls assoc (:call-id code-mode-call) code-mode-call)
+            (when on-item-started
+              (on-item-started code-mode-call)))
+          (when-let [code-mode-output (codec/code-mode-output msg)]
+            (when-let [code-mode-call (get @code-mode-calls (:call-id code-mode-output))]
+              (swap! code-mode-calls dissoc (:call-id code-mode-output))
+              (when on-item-completed
+                (on-item-completed
+                 (merge code-mode-call
+                        code-mode-output
+                        {:status "completed"})))))
           (when-let [{:keys [thread-id thread-name]} (codec/thread-name-updated msg)]
             (when (or (str/blank? (str (or thread-id "")))
                       (= thread-id (:thread-id client)))

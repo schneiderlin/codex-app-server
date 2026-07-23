@@ -15,6 +15,18 @@
     (is (= ["C:\\Windows\\System32\\cmd.exe" "/d" "/c" "codex" "app-server" "--listen" "stdio://"]
            (sut/codex-app-server-command "Windows 11" "C:\\Windows\\System32\\cmd.exe")))))
 
+(deftest codex-app-server-command-code-mode-only-test
+  (testing "the feature is omitted by default and when explicitly disabled"
+    (doseq [config [{} {:code-mode-only? false}]]
+      (is (= ["codex" "app-server" "--listen" "stdio://"]
+             (sut/codex-app-server-command config "Linux" nil)))))
+  (testing "the feature can be enabled on unix-like systems"
+    (is (= ["codex" "app-server" "--enable" "code_mode_only" "--listen" "stdio://"]
+           (sut/codex-app-server-command {:code-mode-only? true} "Linux" nil))))
+  (testing "the feature can be enabled through the Windows command wrapper"
+    (is (= ["cmd.exe" "/d" "/c" "codex" "app-server" "--enable" "code_mode_only" "--listen" "stdio://"]
+           (sut/codex-app-server-command {:code-mode-only? true} "Windows 11" nil)))))
+
 (deftest resolve-codex-home-test
   (testing "explicit config wins"
     (is (= "/tmp/custom-codex-home"

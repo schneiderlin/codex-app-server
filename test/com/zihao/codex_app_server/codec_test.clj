@@ -30,6 +30,47 @@
              :content-items [{:type "inputText" :text "done"}
                              {:type "invalid"}]})))))
 
+(deftest code-mode-raw-response-items-test
+  (testing "exec source is normalized without exposing the raw response envelope"
+    (is (= {:item-type "codeMode"
+            :item-id "ctc-1"
+            :status "running"
+            :codex-turn-id "turn-1"
+            :call-id "call-1"
+            :language "javascript"
+            :source "const value = 42;\ntext(value);"}
+           (codec/code-mode-call
+            {:method "rawResponseItem/completed"
+             :params {:threadId "thread-1"
+                      :turnId "turn-1"
+                      :item {:type "custom_tool_call"
+                             :id "ctc-1"
+                             :call_id "call-1"
+                             :name "exec"
+                             :input "const value = 42;\ntext(value);"}}}))))
+  (testing "matching output content is flattened in protocol order"
+    (is (= {:codex-turn-id "turn-1"
+            :call-id "call-1"
+            :output "Script completed\nOutput:\n42"}
+           (codec/code-mode-output
+            {:method "rawResponseItem/completed"
+             :params {:threadId "thread-1"
+                      :turnId "turn-1"
+                      :item {:type "custom_tool_call_output"
+                             :call_id "call-1"
+                             :output [{:type "input_text"
+                                       :text "Script completed\n"}
+                                      {:type "input_text"
+                                       :text "Output:\n42"}]}}}))))
+  (testing "non-exec custom tools are not exposed as Code Mode"
+    (is (nil? (codec/code-mode-call
+               {:method "rawResponseItem/completed"
+                :params {:turnId "turn-1"
+                         :item {:type "custom_tool_call"
+                                :call_id "call-1"
+                                :name "other"
+                                :input "secret"}}})))))
+
 (deftest normalize-thread-read-response-keeps-recoverable-entries-only
   (testing "thread/read turns become append-only entries while compaction stays hidden"
     (let [normalized (codec/normalize-thread-read-response
